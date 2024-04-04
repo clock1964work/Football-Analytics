@@ -7,7 +7,10 @@ from mplsoccer.pitch import VerticalPitch,Pitch
 import io  # Add this line
 import numpy as np
 from flask import Flask
-app = Flask(__name__)
+import os
+
+# Get the port provided by Heroku's environment variable
+port = int(os.environ.get("PORT", 8501))
 # Function to establish a connection to the PostgreSQL database
 def connect_to_database():
   conn = psycopg2.connect(
@@ -457,6 +460,8 @@ def main():
        display_key_passes(key_passes_data,selected_player)
 
 # Run the app
+# Run your Streamlit app with the provided port
+if __name__ == "__main__":
+    st.set_option('server.port', port)
+    st.write("Hello, World!")
 
-if __name__ == '__main__':
-    main()
