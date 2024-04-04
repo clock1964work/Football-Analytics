@@ -6,7 +6,8 @@ from matplotlib.lines import Line2D
 from mplsoccer.pitch import VerticalPitch,Pitch
 import io  # Add this line
 import numpy as np
-
+from flask import Flask
+app = Flask(__name__)
 # Function to establish a connection to the PostgreSQL database
 def connect_to_database():
   conn = psycopg2.connect(
@@ -456,5 +457,6 @@ def main():
        display_key_passes(key_passes_data,selected_player)
 
 # Run the app
+
 if __name__ == '__main__':
     main()
