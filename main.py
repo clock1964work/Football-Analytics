@@ -9,8 +9,7 @@ import numpy as np
 from flask import Flask
 import os
 
-# Get the port provided by Heroku's environment variable
-port = int(os.environ.get("PORT", 8501))
+
 # Function to establish a connection to the PostgreSQL database
 def connect_to_database():
   conn = psycopg2.connect(
@@ -461,7 +460,5 @@ def main():
 
 # Run the app
 # Run your Streamlit app with the provided port
-if __name__ == "__main__":
-    st.set_option('server.port', port)
-    st.write("Hello, World!")
-
+if __name__ == '__main__':
+    main()
