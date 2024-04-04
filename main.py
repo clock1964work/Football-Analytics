@@ -8,7 +8,14 @@ import io  # Add this line
 import numpy as np
 from flask import Flask
 import os
+# Import necessary libraries
+import os
+import streamlit as st
 
+# Get the port from environment variable, default to 5000 for local development
+PORT = os.environ.get('PORT', 5000)
+
+# Your Streamlit app starts here
 
 # Function to establish a connection to the PostgreSQL database
 def connect_to_database():
