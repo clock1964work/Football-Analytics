@@ -11,8 +11,6 @@ import os
 import streamlit as st
 
 
-# Your Streamlit app starts here
-
 # Function to establish a connection to the PostgreSQL database
 def connect_to_database():
   conn = psycopg2.connect(
@@ -422,7 +420,6 @@ def display_key_passes(key_passes_data, player_name):
     st.text(comment)
 
 
-# Modify the main function to include the passes display
 def main():
    # Connect to the PostgreSQL database
    conn = connect_to_database()
