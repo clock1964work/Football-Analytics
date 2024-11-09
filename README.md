@@ -23,7 +23,6 @@ This app provides football data visualization for players in the English Premier
 - **os**: For managing file paths and operating system interactions.
 
 
-Web Scraping for Football Event Data
 The app fetches football event data from a PostgreSQL database in Supabase. The data in this database is populated by a web scraper that gathers match and player statistics from WhoScored using Python's BeautifulSoup and requests libraries.
 # Web Scrapper Pipeline 
 ### all_together.py
@@ -45,11 +44,11 @@ Parse HTML with BeautifulSoup: Use BeautifulSoup to parse the HTML content and e
 The database structure is organized to store player and team data  across various matches. For example, tables can include:
 
 - **Players**: Stores player information (name, team, position, etc.).
-- **Matches**: Stores match details (date, opponent, match result).
+- **Teams**: Stores teams information (name, country, etch.).
 - **Event Data**: Stores player event data for each match (shots, coordinates, assists, passes, tackles, etc.).
 - **Additional Info**: Stores additional match details such as date, stadium, attendance, referee, etc.
 
-## Data Flow for Both project
+## Data Flow for Both projects
 
 - **Data Retrieval**: The app uses Supabase to fetch pre-scraped data from the PostgreSQL database, ensuring up-to-date and consistent information.
 - **Data Processing**: Retrieved data is validated and structured using Pydantic models for easy handling and visualization.
