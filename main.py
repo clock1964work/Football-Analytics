@@ -426,7 +426,7 @@ def main():
 
    # Streamlit UI
 # Streamlit UI
-st.title('Football Data Visualization App\nEnglish Premier League 2024-2025')
+   st.title('Football Data Visualization App\nEnglish Premier League 2024-2025')
 
 
 
