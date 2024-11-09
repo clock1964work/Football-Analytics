@@ -425,7 +425,9 @@ def main():
    conn = connect_to_database()
 
    # Streamlit UI
-   st.title('Football Data Visualization App\nEnglish Premier League 2024-2025')
+# Streamlit UI
+st.title('Football Data Visualization App\nEnglish Premier League 2024-2025')
+
 
 
    # Add filter to the sidebar for selecting team
