@@ -22,8 +22,8 @@ This app provides football data visualization for players in the English Premier
 - **io**: For handling data input and output, especially for image plotting and saving.
 - **os**: For managing file paths and operating system interactions.
 
-
 The app fetches football event data from a PostgreSQL database in Supabase. The data in this database is populated by a web scraper that gathers match and player statistics from WhoScored using Python's BeautifulSoup and requests libraries.
+
 # Web Scrapper Pipeline 
 ### all_together.py
 ## Web Scraping Process
@@ -39,12 +39,11 @@ Parse HTML with BeautifulSoup: Use BeautifulSoup to parse the HTML content and e
 - **`selenium`**: For automating web browser interactions to access dynamic content on WhoScored.
 - **`supabase`** (from `supabase-py`): To establish a direct connection to the Supabase database and insert data via `create_client`.
 
-
 ## Database Structure
-The database structure is organized to store player and team data  across various matches. For example, tables can include:
+The database structure is organized to store player and team data across various matches. For example, tables can include:
 
 - **Players**: Stores player information (name, team, position, etc.).
-- **Teams**: Stores teams information (name, country, etch.).
+- **Teams**: Stores teams information (name, country, etc.).
 - **Event Data**: Stores player event data for each match (shots, coordinates, assists, passes, tackles, etc.).
 - **Additional Info**: Stores additional match details such as date, stadium, attendance, referee, etc.
 
@@ -53,3 +52,6 @@ The database structure is organized to store player and team data  across variou
 - **Data Retrieval**: The app uses Supabase to fetch pre-scraped data from the PostgreSQL database, ensuring up-to-date and consistent information.
 - **Data Processing**: Retrieved data is validated and structured using Pydantic models for easy handling and visualization.
 - **Data Visualization**: The app displays player and match performance data using Streamlit and visualization libraries like Matplotlib and mplsoccer.
+
+=======
+# epl-football-event-app
