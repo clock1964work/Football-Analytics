@@ -21,6 +21,237 @@ def connect_to_database():
   )
   return conn
 
+
+# Fetch match data
+def fetch_match_data(conn, match_id):
+    cur = conn.cursor()
+    cur.execute("""
+        select m.team_id,m.x,m.y,m.end_x,m.end_y,m.is_goal,m.is_shot,m.type_display_name,m.outcome_type_display_name,m.match_id,p.name,t.team_name
+        from match_events m
+        join teams t on m.team_id = t.team_id
+        join players p on m.player_id = p.player_id
+
+        WHERE m.match_id = %s
+    """, (match_id,))
+    df = pd.DataFrame(cur.fetchall(), columns=[desc[0] for desc in cur.description])
+    cur.close()
+    return df
+
+# Fetch available dates (optionally filtered by team)
+def fetch_available_dates(conn, selected_team=None):
+    cur = conn.cursor()
+
+    if selected_team:
+        cur.execute("""
+            SELECT DISTINCT start_time::date
+            FROM additional_info
+            WHERE home_team_name = %s OR away_team_name = %s
+            ORDER BY start_time ASC
+        """, (selected_team, selected_team))
+    else:
+        cur.execute("""
+            SELECT DISTINCT start_time::date
+            FROM additional_info
+            ORDER BY start_time ASC
+        """)
+
+    available_dates = [row[0] for row in cur.fetchall()]
+    cur.close()
+    return available_dates
+
+
+# Fetch games based on selected filters (team, date, or both)
+def fetch_games(conn, selected_team=None, selected_date=None):
+    cur = conn.cursor()
+
+    query = """
+        SELECT match_id, home_team_name, away_team_name, venue_name, attendance, referee_name
+        FROM additional_info
+    """
+
+    conditions = []
+    params = []
+
+    if selected_team:
+        conditions.append("(home_team_name = %s OR away_team_name = %s)")
+        params.extend([selected_team, selected_team])
+
+    if selected_date:
+        conditions.append("start_time::date = %s")
+        params.append(selected_date)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    cur.execute(query, tuple(params))
+
+    games = {}
+    game_details = {}
+
+    for row in cur.fetchall():
+        match_id = row[0]
+        games[match_id] = f"{row[1]} vs {row[2]}"
+        game_details[match_id] = {
+            "home_team": row[1],
+            "away_team": row[2],
+            "venue_name": row[3],
+            "attendance": row[4],
+            "referee_name": row[5]
+        }
+
+    cur.close()
+    return games, game_details
+
+
+# Plot Passing Network
+def plot_passing_network(team_name, passes, ax, pitch, color):
+    # Filter passes based on the team_name
+    team_passes = passes[passes['team_name'] == team_name]
+
+    team_passes["receiver"] = team_passes["name"].shift(-1)
+    team_passes = team_passes.dropna(subset=["end_x", "end_y", "receiver"])
+    team_passes["pair_key"] = team_passes.apply(lambda x: "_".join(sorted([x["name"], x["receiver"]])), axis=1)
+    lines_df = team_passes.groupby("pair_key").x.count().reset_index()
+    lines_df.rename(columns={'x': 'pass_count'}, inplace=True)
+    lines_df = lines_df[lines_df['pass_count'] > 2]
+
+    scatter_df = pd.DataFrame()
+    for i, name in enumerate(team_passes["name"].unique()):
+        passx = team_passes[team_passes["name"] == name]["x"].to_numpy()
+        recx = team_passes[team_passes["receiver"] == name]["end_x"].to_numpy()
+        passy = team_passes[team_passes["name"] == name]["y"].to_numpy()
+        recy = team_passes[team_passes["receiver"] == name]["end_y"].to_numpy()
+        scatter_df.at[i, "name"] = name
+        scatter_df.at[i, "x"] = np.mean(np.concatenate([passx, recx]))
+        scatter_df.at[i, "y"] = np.mean(np.concatenate([passy, recy]))
+        scatter_df.at[i, "no"] = team_passes[team_passes["name"] == name].shape[0]
+
+    scatter_df["marker_size"] = scatter_df["no"] / scatter_df["no"].max() * 70
+    pitch.scatter(scatter_df.x, scatter_df.y, s=scatter_df.marker_size, color=color, edgecolors='grey', linewidth=1,
+                  alpha=1, ax=ax)
+    for i, row in lines_df.iterrows():
+        player1, player2 = row["pair_key"].split("_")
+        if player1 in scatter_df["name"].values and player2 in scatter_df["name"].values:
+            player1_x, player1_y = scatter_df[scatter_df["name"] == player1][["x", "y"]].values[0]
+            player2_x, player2_y = scatter_df[scatter_df["name"] == player2][["x", "y"]].values[0]
+            line_width = row["pass_count"] / lines_df["pass_count"].max() * 1
+            pitch.lines(player1_x, player1_y, player2_x, player2_y, lw=line_width, color=color, ax=ax)
+
+# Create Table
+def create_table(ax, df, teams):
+    # Count Goals for each team (filtering by is_goal)
+    team1_goals = df[(df["team_name"] == teams[0]) & (df["is_goal"] == True)].shape[0]
+    team2_goals = df[(df["team_name"] == teams[1]) & (df["is_goal"] == True)].shape[0]
+
+    # Count Total Shots for each team (filtering by is_shot)
+    team1_shots = df[(df["team_name"] == teams[0]) & (df["is_shot"] == True)].shape[0]
+    team2_shots = df[(df["team_name"] == teams[1]) & (df["is_shot"] == True)].shape[0]
+
+    # Count Shots on Target for each team (filtering by type_display_name for 'SavedShot' and is_shot)
+    team1_shots_on_target = df[(df["team_name"] == teams[0]) & (df["type_display_name"] == "SavedShot")].shape[0]
+    team2_shots_on_target = df[(df["team_name"] == teams[1]) & (df["type_display_name"] == "SavedShot")].shape[0]
+
+    # Shots on target should also include the goals (as goals are considered shots on target)
+    team1_shots_on_target += team1_goals
+    team2_shots_on_target += team2_goals
+
+    # Count Total Passes for each team (filtering by type_display_name for "Pass")
+    team1_passes = df[(df["team_name"] == teams[0]) & (df["type_display_name"] == "Pass")].shape[0]
+    team2_passes = df[(df["team_name"] == teams[1]) & (df["type_display_name"] == "Pass")].shape[0]
+
+    # Count Successful Passes for each team (filtering by outcome_type_display_name for "Successful")
+    team1_successful_passes = df[(df["team_name"] == teams[0]) & (df["type_display_name"] == "Pass") & (df["outcome_type_display_name"] == "Successful")].shape[0]
+    team2_successful_passes = df[(df["team_name"] == teams[1]) & (df["type_display_name"] == "Pass") & (df["outcome_type_display_name"] == "Successful")].shape[0]
+
+    # Calculate Pass Completion Percentage (successful passes / total passes)
+    team1_pass_completion = (team1_successful_passes / team1_passes) * 100 if team1_passes > 0 else 0
+    team2_pass_completion = (team2_successful_passes / team2_passes) * 100 if team2_passes > 0 else 0
+
+    # Prepare the column labels and the data for the table
+    column_labels = [teams[0], "Stat", teams[1]]
+    table_vals = [
+        [str(team1_goals), "Goals", str(team2_goals)],
+        [str(team1_shots), "Shots", str(team2_shots)],
+        [str(team1_shots_on_target), "Shots on Target", str(team2_shots_on_target)],
+        [str(team1_passes), "Passes", str(team2_passes)],
+        [f"{team1_pass_completion:.2f}%", "Pass Completion", f"{team2_pass_completion:.2f}%"]
+    ]
+
+    # Create the table
+    table = ax.table(
+        cellText=table_vals,
+        colLabels=column_labels,
+        cellLoc='center',
+        loc='center',
+        bbox=[0, 0, 1, 1],  # Define table position and size
+        edges='horizontal',  # Only horizontal edges
+    )
+
+    # Customize cell borders to remove the top line
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:  # Header row
+            cell.visible_edges = 'B'  # Keep only the bottom edge for the header
+        else:
+            cell.visible_edges = 'horizontal'  # Only horizontal lines for other rows
+
+    table.set_fontsize(12)
+    table.auto_set_column_width([0, 1, 2])  # Adjust column width
+    ax.axis('off')
+
+
+
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+from matplotlib.lines import Line2D
+from mplsoccer import Pitch
+
+# Force Matplotlib to apply edge colors properly
+mpl.rcParams["patch.force_edgecolor"] = True
+
+def create_combined_shotmap(data, team1, team2, ax):
+    shots_df = data[data["is_shot"] == True]
+    pitch = Pitch(pitch_type='opta', goal_type='box', linewidth=.85, line_color='black')
+    pitch.draw(ax=ax)
+
+    # Iterate over each shot and determine the corresponding color and type
+    for _, shot in shots_df.iterrows():
+        x, y = shot["x"], shot["y"]
+        goal = shot["type_display_name"] == "Goal"
+        miss = shot["type_display_name"] == "MissedShots"  # Missed shot (off target)
+        team_name = shot["team_name"]
+
+        # Define colors based on shot type
+        if goal:
+            color = "green"  # Goal
+            edgecolor = "black"  # Black edge for goals
+        elif miss:
+            color = "red"  # Missed shot (off target)
+            edgecolor = "black"  # Black edge for missed shots
+        else:
+            color = "white"  # Shot on target (everything else)
+            edgecolor = "red"  # Red edge for shot on target
+
+        # If the shot is from team1, flip the coordinates
+        if team_name == team1:
+            x, y = 100 - x, 100 - y
+
+        # Plot the shot with correct edge color
+        ax.scatter([x], [y], color=color, edgecolors=edgecolor, s=100, linewidth=1.5, zorder=10)
+
+    # Define the legend with updated colors
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=10,markeredgecolor='black', label='Goals'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10,markeredgecolor='black', label='Shot off target'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='white', markersize=9, markeredgewidth=1.5,
+               markeredgecolor='red', label='Shot on target', linestyle='None')
+    ]
+
+    # Adjust legend description font size
+    legend_font_size = 8
+
+    # Adjust legend size and position
+    ax.legend(handles=legend_elements, loc='center', bbox_to_anchor=(0.5, -0.1), ncol=2, fontsize=legend_font_size)
+
 # Function to fetch team names from the database
 def fetch_team_names(conn):
   cur = conn.cursor()
@@ -240,30 +471,28 @@ def display_heatmap(data, player_name):
     bin_statistic = pitch.bin_statistic(danger_passes.x, danger_passes.y, statistic='count', bins=(6, 5),
                                         normalize=False)
 
-    # Handle division by zero when len(data) is zero
     if len(data) != 0:
         bin_statistic["statistic"] = bin_statistic["statistic"] / len(data)
-    else:
-        # Handle the case when len(data) is zero to avoid division by zero
 
-        pass
-
-    # Check for NaN values before dividing
     if not np.isnan(bin_statistic["statistic"]).any():
         bin_statistic["statistic"] = bin_statistic["statistic"] / len(data)
-    else:
-        # Handle the case when bin_statistic["statistic"] contains NaN values
-
-        pass
 
     heatmap = pitch.heatmap(bin_statistic, cmap='Reds', edgecolor='grey', ax=ax)
+
     # Add legend indicating color range and danger level below the plot
     cbar = plt.colorbar(heatmap, orientation='horizontal', aspect=20, shrink=0.5)
     cbar.set_ticks([bin_statistic['statistic'].min(), bin_statistic['statistic'].max()])
     cbar.ax.set_xticklabels(['Low', 'High'], fontsize=8)
 
     plt.title('Starting location of Danger passes heatmap by ' + player_name)
+
+    # Add arrow below the heatmap (same size and position as in passing network)
+    ax.annotate("", xy=(0.66, -0.05), xytext=(0.33, -0.05),  # Position adjusted for consistency
+                xycoords='axes fraction', textcoords='axes fraction',
+                arrowprops=dict(arrowstyle="->", color="black", lw=2))
+
     st.pyplot(fig)
+
 
 
 # Function to display defensive actions plot using Matplotlib
@@ -283,9 +512,9 @@ def display_defensive_actions_plot(defensive_actions_data, player_name):
         action_type = defense["type_display_name"]
 
         color = "green" if action_type == "BallRecovery" else \
-                "red" if action_type == "Clearance" else \
+            "red" if action_type == "Clearance" else \
                 "blue" if action_type == "Interception" else \
-                "black"
+                    "black"
         ax.scatter(x, y, color=color, label=action_type)
 
     # Define legend elements based on defensive action types
@@ -296,12 +525,17 @@ def display_defensive_actions_plot(defensive_actions_data, player_name):
         Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=10, label='Tackle')
     ]
     legend_font_size = 8
-    # Adjust legend size and position
+
     # Add legend below the pitch, closer to the line
     ax.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.04), ncol=4,
               fontsize=legend_font_size)
 
     plt.title(f'Defensive Actions for {player_name}')
+
+    # Add One Arrow Below the Plot
+    ax.annotate("", xy=(0.66, -0.05), xytext=(0.33, -0.05),
+                xycoords='axes fraction', textcoords='axes fraction',
+                arrowprops=dict(arrowstyle="->", color="black", lw=2))
 
     num_tackle = defensive_actions_data[defensive_actions_data['type_display_name'] == 'Tackle'].shape[0]
     num_clearance = defensive_actions_data[defensive_actions_data['type_display_name'] == 'Clearance'].shape[0]
@@ -309,11 +543,9 @@ def display_defensive_actions_plot(defensive_actions_data, player_name):
     num_ball_recovery = defensive_actions_data[defensive_actions_data['type_display_name'] == 'BallRecovery'].shape[0]
 
     comment = f"Tackle: {num_tackle}\nClearance: {num_clearance}\nInterception: {num_interception}\nBall Recovery: {num_ball_recovery}"
+
     st.pyplot(fig)
     st.text(comment)
-
-
-
 
 
 # Function to display passes using Matplotlib
@@ -360,11 +592,15 @@ def display_passes(passes_data, player_name):
 
     plt.title(f'Passes for {player_name}')
 
+    # Add One Arrow Below the Plot
+    ax.annotate("", xy=(0.66, -0.05), xytext=(0.33, -0.05),
+                xycoords='axes fraction', textcoords='axes fraction',
+                arrowprops=dict(arrowstyle="->", color="black", lw=2))
+
     st.pyplot(fig)
 
     # Calculate percentage of successful passes
     percent_successful_passes = (num_successful_passes / num_total_passes) * 100
-
 
     comments = f"Total passes: {num_total_passes}\n"
     comments += f"Successful passes: {num_successful_passes}\n"
@@ -408,11 +644,16 @@ def display_key_passes(key_passes_data, player_name):
               fontsize=legend_font_size)
 
     plt.title(f'Key Passes for {player_name}')
+
+    #  Add One Arrow Below the Plot
+    ax.annotate("", xy=(0.66, -0.05), xytext=(0.33, -0.05),
+                xycoords='axes fraction', textcoords='axes fraction',
+                arrowprops=dict(arrowstyle="->", color="black", lw=2))
+
     st.pyplot(fig)
 
     # Calculate total key passes
     num_key_passes = len(key_passes_data)
-
 
     comment = f"Total key passes: {num_key_passes}"
 
@@ -421,46 +662,131 @@ def display_key_passes(key_passes_data, player_name):
 
 
 def main():
-   # Connect to the PostgreSQL database
-   conn = connect_to_database()
+    # Connect to the PostgreSQL database
+    conn = connect_to_database()
 
-   # Streamlit UI
-# Streamlit UI
-   st.title('Football Data Visualization App\nEnglish Premier League 2024-2025')
+    # Streamlit UI
+    st.title('Football Data Visualization App\nEnglish Premier League 2024-2025')
+
+    # Page selection
+    page = st.sidebar.radio("Select Page", ["Player Report", "Match Report"])
+
+    if page == "Player Report":
+        # Player Report Page
+        st.header("Player Report")
+
+        # Add filter to the sidebar for selecting team
+        selected_team = st.sidebar.selectbox('Select Team', fetch_team_names(conn))
+
+        # Fetch players based on the selected team
+        players = fetch_players_by_team(conn, selected_team)
+
+        # Input widget for selecting player
+        selected_player = st.sidebar.selectbox('Select Player', players)
+
+        # Fetch shot, passes, danger passes, defensive actions, and key passes data for the selected player
+        shot_data = fetch_shot_data(conn, selected_player)
+        heatmap_data = fetch_danger_passes_data(conn, selected_player)
+        defensive_actions_data = fetch_defensive_actions_data(conn, selected_player)
+        passes_data = fetch_passes_data(conn, selected_player)
+        key_passes_data = fetch_key_passes_data(conn, selected_player)
+
+        # Display shot map, heatmap, defensive actions plot, and passes
+        visualization_type = st.sidebar.radio(
+            'Select Visualization', ['Shot Map', 'Heatmap', 'Defensive Actions', 'Passes', 'Key Passes']
+        )
+
+        if visualization_type == "Shot Map":
+            display_shot_map(shot_data, selected_player)
+        elif visualization_type == "Heatmap":
+            display_heatmap(heatmap_data, selected_player)
+        elif visualization_type == "Defensive Actions":
+            display_defensive_actions_plot(defensive_actions_data, selected_player)
+        elif visualization_type == "Passes":
+            display_passes(passes_data, selected_player)
+        elif visualization_type == "Key Passes":
+            display_key_passes(key_passes_data, selected_player)
 
 
+    elif page == "Match Report":
+        # Fetch all teams
+        all_teams = fetch_team_names(conn)
 
-   # Add filter to the sidebar for selecting team
-   selected_team = st.sidebar.selectbox('Select Team', fetch_team_names(conn))
+        # Team selection (Optional)
+        selected_team = st.sidebar.selectbox("Select Team (Optional)", ["All Teams"] + all_teams)
 
-   # Fetch players based on selected team
-   players = fetch_players_by_team(conn, selected_team)
+        #  Fetch available dates based on selected team
+        available_dates = fetch_available_dates(conn, None if selected_team == "All Teams" else selected_team)
+        selected_date = st.sidebar.selectbox("Select Match Date (Optional)", ["All Dates"] + available_dates)
 
-   # Input widget for selecting player
-   selected_player = st.sidebar.selectbox('Select Player', players)
+        # Fetch games based on filters
+        games, game_details = fetch_games(
+            conn,
+            None if selected_team == "All Teams" else selected_team,
+            None if selected_date == "All Dates" else selected_date
+        )
 
-   # Fetch shot, passes,danger passes ,defensive actions and key passes data for the selected player
-   shot_data = fetch_shot_data(conn, selected_player)
-   heatmap_data = fetch_danger_passes_data(conn, selected_player)
-   defensive_actions_data = fetch_defensive_actions_data(conn, selected_player)
-   passes_data = fetch_passes_data(conn,selected_player)
-   key_passes_data = fetch_key_passes_data(conn,selected_player)
+        if not games:
+            st.warning("No games available for the selected filters.")
+            st.stop()
+
+        #Game selection
+        selected_game_id = st.sidebar.selectbox("Select Game", list(games.keys()), format_func=lambda x: games[x])
+
+        #Load match data and display visualizations
+        st.subheader(f"Match Report for {games[selected_game_id]}")
+        match_data = fetch_match_data(conn, selected_game_id)
+
+        if match_data is not None:
+            # Extract home and away team names
+            home_team_name, away_team_name = games[selected_game_id].split(" vs ")
+
+            # Fetch additional game details
+            selected_game_info = game_details[selected_game_id]
+            venue = selected_game_info["venue_name"]
+            attendance = selected_game_info["attendance"]
+            referee = selected_game_info["referee_name"]
+
+            # Create figure for passing network and shot map visualization
+            fig = plt.figure(figsize=(15, 11))
+
+            # **Top Row - Passing Networks & Table**
+            ax1 = fig.add_axes([0.1, 0.55, 0.25, 0.35])  # Home team passing network
+            pitch = Pitch(pitch_type='opta', goal_type='box', linewidth=0.85, line_color='black')
+            pitch.draw(ax1)
+            plot_passing_network(home_team_name, match_data, ax1, pitch, color="blue")
+            ax1.set_title(f"Passing Network - {home_team_name}")
+            # Add arrow under ax1
+            ax1.annotate("", xy=(0.66, -0.05), xytext=(0.33, -0.05),
+                         xycoords='axes fraction', textcoords='axes fraction',
+                         arrowprops=dict(arrowstyle="->", color="black", lw=2))
+
+            ax3 = fig.add_axes([0.65, 0.55, 0.25, 0.35])  # Away team passing network
+            pitch.draw(ax3)
+            plot_passing_network(away_team_name, match_data, ax3, pitch, color="red")
+            ax3.set_title(f"Passing Network - {away_team_name}")
+            # Add arrow under ax3
+            ax3.annotate("", xy=(0.66, -0.05), xytext=(0.33, -0.05),
+                         xycoords='axes fraction', textcoords='axes fraction',
+                         arrowprops=dict(arrowstyle="->", color="black", lw=2))
+
+            ax2 = fig.add_axes([0.4, 0.55, 0.2, 0.35])  # Stats table
+            create_table(ax2, match_data, [home_team_name, away_team_name])
+
+            # **Bottom Row - Shot Map**
+            ax4 = fig.add_axes([0.05, 0.05, 0.9, 0.45])  # Full width, bigger height
+            ax4.clear()
+
+            title_text = f"{venue} | Att - {attendance} | Ref - {referee}"
+            ax4.text(0.5, 1.05, title_text, fontsize=14, ha='center', transform=ax4.transAxes, fontweight='bold')
+
+            # Generate the shot map
+            create_combined_shotmap(match_data, home_team_name, away_team_name, ax=ax4)
+
+            # Show the plot
+            st.pyplot(fig)
 
 
-   # Display shot map, heatmap, defensive actions plot, and passes
-   visualization_type = st.sidebar.radio('Select Visualization', ['Shot Map', 'Heatmap', 'Defensive Actions', 'Passes','Key Passes'])
-   if visualization_type == "Shot Map":
-       display_shot_map(shot_data, selected_player)
-   elif visualization_type == "Heatmap":
-       display_heatmap(heatmap_data, selected_player)
-   elif visualization_type == "Defensive Actions":
-       display_defensive_actions_plot(defensive_actions_data, selected_player)
-   elif visualization_type == "Passes":
-       display_passes(passes_data, selected_player)
-   elif visualization_type == "Key Passes":
-       display_key_passes(key_passes_data,selected_player)
-
-# Run the app
-# Run your Streamlit app with the provided port
-if __name__ == '__main__':
+# ✅ This ensures Streamlit runs the app when executing the script
+if __name__ == "__main__":
     main()
