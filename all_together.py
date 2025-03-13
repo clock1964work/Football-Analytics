@@ -265,7 +265,9 @@ def scrape_match_events(whoscored_url, driver):
     return print('Success')
 
 
-driver.get('https://www.whoscored.com/Teams/163/Fixtures/England-Sheffield-United')
+driver.get('https://www.whoscored.com/teams/26/fixtures/england-liverpool'
+
+           )
 time.sleep(3)
 soup = BeautifulSoup(driver.page_source, 'html.parser')
 all_urls = soup.select('a[href*="\/Live\/"]')
