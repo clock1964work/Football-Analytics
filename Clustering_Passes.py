@@ -131,7 +131,7 @@ print("Reference Inertia:", reference_inertia)
 print("On-Data Inertia:", ondata_inertia)
 
 # Run K-Means clustering with k = 4
-k = 9
+k = 4
 cluster = KMeans(n_clusters=k, random_state=2147)
 labels = cluster.fit_predict(X)
 
@@ -141,7 +141,7 @@ liverpool_progressive["label"] = labels
 
 # Set up the pitch
 pitch = Pitch(line_color='black', pitch_type="opta")
-fig, axs = pitch.grid(ncols=3, nrows=3, grid_height=0.85, title_height=0.06, axis=False,
+fig, axs = pitch.grid(ncols=2, nrows=2, grid_height=0.85, title_height=0.06, axis=False,
                       endnote_height=0.04, title_space=0.04, endnote_space=0.01)
 
 # Plot each cluster
