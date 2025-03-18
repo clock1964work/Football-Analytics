@@ -12,14 +12,27 @@ import streamlit as st
 
 
 # Function to establish a connection to the PostgreSQL database
-def connect_to_database():
-  conn = psycopg2.connect(
-      host="aws-0-eu-central-1.pooler.supabase.com",
-      database="postgres",
-      user="postgres.dukvqeeuktlsotlwgtjb",
-      password="8FQUT1zEGep0numj"
-  )
-  return conn
+import psycopg2
+from psycopg2 import pool
+
+# Create a database connection pool
+db_pool = pool.SimpleConnectionPool(
+    minconn=1,  # Minimum number of connections
+    maxconn=10, # Maximum number of connections
+    host="aws-0-eu-central-1.pooler.supabase.com",
+    database="postgres",
+    user="postgres.dukvqeeuktlsotlwgtjb",
+    password="8FQUT1zEGep0numj"
+)
+
+# Function to get a connection from the pool
+def get_db_connection():
+    return db_pool.getconn()
+
+# Function to release a connection back to the pool
+def release_db_connection(conn):
+    db_pool.putconn(conn)
+
 
 
 # Fetch match data
@@ -274,23 +287,31 @@ def fetch_players_by_team(conn, team):
   return players
 
 # Function to fetch shot data for a player
+import pandas as pd
+
 def fetch_shot_data(conn, player):
-  cur = conn.cursor()
-  cur.execute("""
-      SELECT *
-      FROM match_events
-      INNER JOIN players ON match_events.player_id = players.player_id
-      WHERE players.name = %s;
-  """, (player,))
+    cur = conn.cursor()
 
-  # Fetch all data from the SQL query
-  shot_data = pd.DataFrame(cur.fetchall(), columns=[desc[0] for desc in cur.description])
-  cur.close()
+    # Optimized SQL query: Select only necessary columns & filter is_shot directly in SQL
+    cur.execute("""
+        SELECT match_events.event_id, match_events.minute, match_events.second, 
+               match_events.team_id, match_events.player_id, match_events.x, match_events.y, 
+               match_events.end_x, match_events.end_y, match_events.qualifiers, match_events.is_touch, 
+               match_events.blocked_x, match_events.blocked_y, match_events.goal_mouth_z, 
+               match_events.goal_mouth_y, match_events.is_goal, 
+               match_events.type_display_name, match_events.outcome_type_display_name, 
+               match_events.match_id, players.name, players.position, players.age
+        FROM match_events
+        INNER JOIN players ON match_events.player_id = players.player_id
+        WHERE players.name = %s AND match_events.is_shot = TRUE;
+    """, (player,))
 
-  # Filter the DataFrame based on is_shot column
-  shot_data = shot_data[shot_data['is_shot'] == True]
+    # Fetch the optimized dataset
+    shot_data = pd.DataFrame(cur.fetchall(), columns=[desc[0] for desc in cur.description])
 
-  return shot_data
+    cur.close()
+    return shot_data
+
 
 # Function to fetch danger passes data for a player
 
@@ -661,41 +682,45 @@ def display_key_passes(key_passes_data, player_name):
     st.text(comment)
 
 
+
+
 def main():
     # Connect to the PostgreSQL database
-    conn = connect_to_database()
+    conn = get_db_connection()
+
 
     # Streamlit UI
     st.title('Football Data Visualization App\nEnglish Premier League 2024-2025')
 
-    # Page selection
+    # Page selection in sidebar
     page = st.sidebar.radio("Select Page", ["Player Report", "Match Report"])
 
     if page == "Player Report":
-        # Player Report Page
         st.header("Player Report")
 
-        # Add filter to the sidebar for selecting team
-        selected_team = st.sidebar.selectbox('Select Team', fetch_team_names(conn))
+        # Create columns to display filters in a single row
+        col1, col2, col3 = st.columns(3)
 
-        # Fetch players based on the selected team
-        players = fetch_players_by_team(conn, selected_team)
+        with col1:
+            selected_team = st.selectbox('Select Team', fetch_team_names(conn))
 
-        # Input widget for selecting player
-        selected_player = st.sidebar.selectbox('Select Player', players)
+        with col2:
+            selected_player = st.selectbox('Select Player', fetch_players_by_team(conn, selected_team))
 
-        # Fetch shot, passes, danger passes, defensive actions, and key passes data for the selected player
+        with col3:
+            visualization_type = st.selectbox(  # Changed from st.radio to st.selectbox
+                'Select Visualization',
+                ['Shot Map', 'Heatmap', 'Defensive Actions', 'Passes', 'Key Passes']
+            )
+
+        # Fetch data based on the selected player
         shot_data = fetch_shot_data(conn, selected_player)
         heatmap_data = fetch_danger_passes_data(conn, selected_player)
         defensive_actions_data = fetch_defensive_actions_data(conn, selected_player)
         passes_data = fetch_passes_data(conn, selected_player)
         key_passes_data = fetch_key_passes_data(conn, selected_player)
 
-        # Display shot map, heatmap, defensive actions plot, and passes
-        visualization_type = st.sidebar.radio(
-            'Select Visualization', ['Shot Map', 'Heatmap', 'Defensive Actions', 'Passes', 'Key Passes']
-        )
-
+        # Display visualization
         if visualization_type == "Shot Map":
             display_shot_map(shot_data, selected_player)
         elif visualization_type == "Heatmap":
@@ -708,33 +733,62 @@ def main():
             display_key_passes(key_passes_data, selected_player)
 
 
+
+
+
     elif page == "Match Report":
+
+        st.title("Match Report")
+
+        # Create three columns to place the filters horizontally
+
+        col1, col2, col3 = st.columns([1, 1, 1])
+
         # Fetch all teams
+
         all_teams = fetch_team_names(conn)
 
-        # Team selection (Optional)
-        selected_team = st.sidebar.selectbox("Select Team (Optional)", ["All Teams"] + all_teams)
+        # Team selection (Optional) in the first column
 
-        #  Fetch available dates based on selected team
-        available_dates = fetch_available_dates(conn, None if selected_team == "All Teams" else selected_team)
-        selected_date = st.sidebar.selectbox("Select Match Date (Optional)", ["All Dates"] + available_dates)
+        with col1:
 
-        # Fetch games based on filters
-        games, game_details = fetch_games(
-            conn,
-            None if selected_team == "All Teams" else selected_team,
-            None if selected_date == "All Dates" else selected_date
-        )
+            selected_team = st.selectbox("Select Team (Optional)", ["All Teams"] + all_teams)
+
+        # Fetch available dates based on selected team in the second column
+
+        with col2:
+
+            available_dates = fetch_available_dates(conn, None if selected_team == "All Teams" else selected_team)
+
+            selected_date = st.selectbox("Select Match Date (Optional)", ["All Dates"] + available_dates)
+
+        # Fetch games based on filters in the third column
+
+        with col3:
+
+            games, game_details = fetch_games(
+
+                conn,
+
+                None if selected_team == "All Teams" else selected_team,
+
+                None if selected_date == "All Dates" else selected_date
+
+            )
 
         if not games:
             st.warning("No games available for the selected filters.")
+
             st.stop()
 
-        #Game selection
-        selected_game_id = st.sidebar.selectbox("Select Game", list(games.keys()), format_func=lambda x: games[x])
+        # Game selection (Optional) - Use a selectbox for selecting a specific game
 
-        #Load match data and display visualizations
+        selected_game_id = st.selectbox("Select Game", list(games.keys()), format_func=lambda x: games[x])
+
+        # Load match data and display visualizations
+
         st.subheader(f"Match Report for {games[selected_game_id]}")
+
         match_data = fetch_match_data(conn, selected_game_id)
 
         if match_data is not None:
